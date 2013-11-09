@@ -16,7 +16,7 @@ in turn is a port of Jason J. Hellenthals' [arc_summary.pl][2]
 
 Use the customised [linux-kstat][3] Perl module.
 
-Memory information has not fully been updated and sysctl ZFS tunables have been disabled.
+Memory information has not fully been updated and sysctl ZFS tunables have been disabled. Tested on Ubuntu 12.04 LTS
 
 [1]: https://github.com/mmatuska/zfs-stats
 [2]: http://code.google.com/p/jhell/

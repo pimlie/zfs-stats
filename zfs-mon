@@ -1,4 +1,4 @@
-#!/usr/bin/env -iS perl
+#!/usr/bin/perl -iS
 #
 # $Id$
 #
@@ -30,7 +30,6 @@
 use strict;
 use Getopt::Std;
 use Data::Dumper;
-my $has_sysctl = eval "use BSD::Sysctl 'sysctl'; 1" ? 1 : 0;
 
 use constant {
 	VERSION => '1.2.2',
@@ -161,78 +160,49 @@ sub getstats {
 	my @ret;
 	my $o = 0;
 
-	if ($has_sysctl) {
-		if ($flags & WANT_ARC) {
-			$ret[ARC][HIT] = sysctl($k[ARC][HIT]);
-			$ret[ARC][MISS] = sysctl($k[ARC][MISS]);
-		}
-		if ($flags & WANT_ARC_DEMAND) {
-			$ret[ARCDD][HIT] = sysctl($k[ARCDD][HIT]);
-			$ret[ARCDD][MISS] = sysctl($k[ARCDD][MISS]);
-			$ret[ARCDM][HIT] = sysctl($k[ARCDM][HIT]);
-			$ret[ARCDM][MISS] = sysctl($k[ARCDM][MISS]);
-		}
-		if ($flags & WANT_ARC_PREFETCH) {
-			$ret[ARCPD][HIT] = sysctl($k[ARCPD][HIT]);
-			$ret[ARCPD][MISS] = sysctl($k[ARCPD][MISS]);
-			$ret[ARCPM][HIT] = sysctl($k[ARCPM][HIT]);
-			$ret[ARCPM][MISS] = sysctl($k[ARCPM][MISS]);
-		}
-		if ($flags & WANT_DMU) {
-			$ret[DMU][HIT] = sysctl($k[DMU][HIT]);
-			$ret[DMU][MISS] = sysctl($k[DMU][MISS]);
-		}
-		if ($flags & WANT_L2) {
-			$ret[L2][HIT] = sysctl($k[L2][HIT]);
-			$ret[L2][MISS] = sysctl($k[L2][MISS]);
-		}
-		if ($flags & WANT_VDEV_PREFETCH) {
-			$ret[VDEV][HIT] = sysctl($k[VDEV][HIT]);
-			$ret[VDEV][MISS] = sysctl($k[VDEV][MISS]);
-		}
-	} else {
-		my $cmd = "/sbin/sysctl -n";
-		$cmd .= " $k[ARC][HIT] $k[ARC][MISS]";
-		$cmd .= " $k[ARCDD][HIT] $k[ARCDD][MISS]";
-		$cmd .= " $k[ARCDM][HIT] $k[ARCDM][MISS]";
-		$cmd .= " $k[ARCPD][HIT] $k[ARCPD][MISS]";
-		$cmd .= " $k[ARCPM][HIT] $k[ARCPM][MISS]";
-		$cmd .= " $k[DMU][HIT] $k[DMU][MISS]";
-		$cmd .= " $k[L2][HIT] $k[L2][MISS]";
-		$cmd .= " $k[VDEV][HIT] $k[VDEV][MISS]";
+	use Sun::Solaris::Kstat;
+        my $Kstat = Sun::Solaris::Kstat->new;
+        $Kstat->update();
+	
+        my @ar = ($Kstat->{$k[ARC][HIT]}, $Kstat->{$k[ARC][MISS]},
+                $Kstat->{$k[ARCDD][HIT]}, $Kstat->{$k[ARCDD][MISS]},
+                $Kstat->{$k[ARCDM][HIT]}, $Kstat->{$k[ARCDM][MISS]},
+                $Kstat->{$k[ARCPD][HIT]}, $Kstat->{$k[ARCPD][MISS]},
+                $Kstat->{$k[ARCPM][HIT]}, $Kstat->{$k[ARCPM][MISS]},
+                $Kstat->{$k[DMU][HIT]}, $Kstat->{$k[DMU][MISS]},
+                $Kstat->{$k[L2][HIT]}, $Kstat->{$k[L2][MISS]},
+                $Kstat->{$k[VDEV][HIT]}, $Kstat->{$k[VDEV][MISS]});
 
-		my @ar = `$cmd`;
-
-		if ($flags & WANT_ARC) {
-			$ret[ARC][HIT] = trim($ar[0]);
-			$ret[ARC][MISS] = trim($ar[1]);
-		}
-
-		if ($flags & WANT_ARC_DEMAND) {
-			$ret[ARCDD][HIT] = trim($ar[2]);
-			$ret[ARCDD][MISS] = trim($ar[3]);
-			$ret[ARCDM][HIT] = trim($ar[4]);
-			$ret[ARCDM][MISS] = trim($ar[5]);
-		}
-		if ($flags & WANT_ARC_PREFETCH) {
-			$ret[ARCPD][HIT] = trim($ar[6]);
-			$ret[ARCPD][MISS] = trim($ar[7]);
-			$ret[ARCPM][HIT] = trim($ar[8]);
-			$ret[ARCPM][MISS] = trim($ar[9]);
-		}
-		if ($flags & WANT_DMU) {
-			$ret[DMU][HIT] = trim($ar[10]);
-			$ret[DMU][MISS] = trim($ar[11]);
-		}
-		if ($flags & WANT_L2) {
-			$ret[L2][HIT] = trim($ar[12]);
-			$ret[L2][MISS] = trim($ar[13]);
-		}
-		if ($flags & WANT_VDEV_PREFETCH) {
-			$ret[VDEV][HIT] = trim($ar[14]);
-			$ret[VDEV][MISS] = trim($ar[15]);
-		}
+	if ($flags & WANT_ARC) {
+		$ret[ARC][HIT] = trim($ar[0]);
+		$ret[ARC][MISS] = trim($ar[1]);
 	}
+
+	if ($flags & WANT_ARC_DEMAND) {
+		$ret[ARCDD][HIT] = trim($ar[2]);
+		$ret[ARCDD][MISS] = trim($ar[3]);
+		$ret[ARCDM][HIT] = trim($ar[4]);
+		$ret[ARCDM][MISS] = trim($ar[5]);
+	}
+	if ($flags & WANT_ARC_PREFETCH) {
+		$ret[ARCPD][HIT] = trim($ar[6]);
+		$ret[ARCPD][MISS] = trim($ar[7]);
+		$ret[ARCPM][HIT] = trim($ar[8]);
+		$ret[ARCPM][MISS] = trim($ar[9]);
+	}
+	if ($flags & WANT_DMU) {
+		$ret[DMU][HIT] = trim($ar[10]);
+		$ret[DMU][MISS] = trim($ar[11]);
+	}
+	if ($flags & WANT_L2) {
+		$ret[L2][HIT] = trim($ar[12]);
+		$ret[L2][MISS] = trim($ar[13]);
+	}
+	if ($flags & WANT_VDEV_PREFETCH) {
+		$ret[VDEV][HIT] = trim($ar[14]);
+		$ret[VDEV][MISS] = trim($ar[15]);
+	}
+	
 	return @ret;
 }
 

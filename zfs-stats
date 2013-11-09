@@ -1,4 +1,4 @@
-#!/usr/bin/env -iS perl
+#!/usr/bin/perl -iS
 #
 # $Id$
 #
@@ -50,7 +50,7 @@ use Getopt::Std;
 
 my $version = '1.2.2';
 
-my $usetunable = 1;			# Change to 0 to disable sysctl MIB spill.
+my $usetunable = 0;			# Change to 0 to disable sysctl MIB spill.
 my $show_sysctl_descriptions = 0;	# Change to 1 (or use the -d flag) to show sysctl descriptions.
 my $alternate_sysctl_layout = 0;	# Change to 1 (or use the -t flag) for alternate output.
 my $raw_data;				# Raw data
@@ -192,34 +192,12 @@ sub fPerc {
 	} else { return sprintf('%0.' . $Decimal . 'f', 100) . "%"; }
 }
 
-my @Kstats = qw(
-	hw.machine
-	hw.machine_arch
-	hw.pagesize
-	hw.physmem
-	kern.maxusers
-	kern.osreldate
-	vm.kmem_map_free
-	vm.kmem_map_size
-	vm.kmem_size
-	vm.kmem_size_max
-	vm.kmem_size_min
-	vm.kmem_size_scale
-	vm.stats
-	kstat.zfs
-	vfs.zfs
-);
+use Sun::Solaris::Kstat;
+my $Kstat = Sun::Solaris::Kstat->new;
+$Kstat->update();
 
-my $Kstat;
-my @Kstat_pull = `/sbin/sysctl -q @Kstats`;
-foreach my $kstat (@Kstat_pull) {
-	chomp $kstat;
-	if ($kstat =~ m/^([^:]+):\s+(.+)\s*$/s) {
-		$Kstat->{$1} = $2;
-	};
-};
-
-if (!$Kstat->{"vfs.zfs.version.spa"}) {
+my $zfsLoaded = `egrep "^(zfs|spl)? " /proc/modules`;
+if ($zfsLoaded eq "") {
 	printf(STDERR "ZFS module not loaded\n");
 	exit 1;
 };
@@ -232,18 +210,24 @@ sub _start {
 }
 
 sub _system_info {
-	my $unamev = `uname -v |sed 's/@.*//' |xargs`;
+	my @uname = `uname -a` =~ /^(\w+) (\w+) (\S+) (.*?) (\S+) (\S+) (\S+) (\S+)$/g;
+	$uname[3] =~ s/@.*//;
 	my $sysuptime = `uptime`;
+	
+	my $dmesg = `dmesg | grep ZFS:`;
+	my ($pool_version) = $dmesg =~ /pool version (\d+)/i;
+	my ($fs_version) = $dmesg =~ /filesystem version (\d+)/i;
+
 	print "System Information:\n";
 	print "\n";
-	printf("\tKernel Version:\t\t\t\t%d (osreldate)\n", $Kstat->{"kern.osreldate"});
-	printf("\tHardware Platform:\t\t\t%s\n", $Kstat->{"hw.machine"});
-	printf("\tProcessor Architecture:\t\t\t%s\n", $Kstat->{"hw.machine_arch"});
+	printf("\tKernel Version:\t\t\t\t%s\n", $uname[2]);
+	printf("\tHardware Platform:\t\t\t%s\n", $uname[6]);
+	printf("\tProcessor Architecture:\t\t\t%s\n", $uname[5]);
 	print "\n";
-	printf("\tZFS Storage pool Version:\t\t%d\n", $Kstat->{"vfs.zfs.version.spa"});
-	printf("\tZFS Filesystem Version:\t\t\t%d\n", $Kstat->{"vfs.zfs.version.zpl"});
+	printf("\tZFS Storage pool Version:\t\t%d\n", $pool_version);
+	printf("\tZFS Filesystem Version:\t\t\t%d\n", $fs_version);
 	print "\n";
-	printf("%s", $unamev);
+	printf("%s\n", $uname[3]);
 	printf("%s", $sysuptime);
 }
 
@@ -260,27 +244,33 @@ sub _system_memory {
 		return $mem_round;
 	}
 
-	my $pagesize = $Kstat->{"hw.pagesize"};
-	my $mem_hw = &mem_rounded($Kstat->{"hw.physmem"});
-	my $mem_phys = $Kstat->{"hw.physmem"};
-	my $mem_all = $Kstat->{"vm.stats.vm.v_page_count"} * $pagesize;
-	my $mem_wire = $Kstat->{"vm.stats.vm.v_wire_count"} * $pagesize;
-	my $mem_active = $Kstat->{"vm.stats.vm.v_active_count"} * $pagesize;
-	my $mem_inactive = $Kstat->{"vm.stats.vm.v_inactive_count"} * $pagesize;
-	my $mem_cache = $Kstat->{"vm.stats.vm.v_cache_count"} * $pagesize;
-	my $mem_free = $Kstat->{"vm.stats.vm.v_free_count"} * $pagesize;
+	my %meminfo;
+	for my $elem (split(/\n/, `cat /proc/meminfo`)) {
+		my ($k, $v, $n) = split(/\s+/ismg, $elem, 3);
+		$meminfo{substr($k,0,-1)} = $v*1024;
+	}
 
-	my $mem_gap_vm = $mem_all - ($mem_wire + $mem_active + $mem_inactive + $mem_cache + $mem_free);
+	my $pagesize = `getconf PAGESIZE`;
+	my $mem_hw = &mem_rounded($meminfo{MemTotal});
+	my $mem_phys = $meminfo{MemTotal};
+	my $mem_all = $meminfo{MemTotal};
+	my $mem_buffers = $meminfo{Buffers};
+	my $mem_active = $meminfo{Active};
+	my $mem_inactive = $meminfo{Inactive};
+	my $mem_cache = $meminfo{Cached};
+	my $mem_free = $meminfo{MemFree};
+
+	my $mem_gap_vm = $mem_all - ($mem_buffers + $mem_active + $mem_inactive + $mem_cache + $mem_free);
 
 	my $mem_total = $mem_hw;
-	my $mem_avail = $mem_inactive + $mem_cache + $mem_free;
-	my $mem_used = $mem_total - $mem_avail;
+	my $mem_avail = $mem_free;
+	my $mem_used = $mem_total - $mem_free;
 
 	print "System Memory:\n";
 	print "\n";
 	printf("\t%s\t%s Active,\t", fPerc($mem_active, $mem_all), fBytes($mem_active));
 	printf("%s\t%s Inact\n", fPerc($mem_inactive, $mem_all), fBytes($mem_inactive));
-	printf("\t%s\t%s Wired,\t", fPerc($mem_wire, $mem_all), fBytes($mem_wire));
+	printf("\t%s\t%s Buffers,\t", fPerc($mem_buffers, $mem_all), fBytes($mem_buffers));
 	printf("%s\t%s Cache\n", fPerc($mem_cache, $mem_all), fBytes($mem_cache));
 	printf("\t%s\t%s Free,\t", fPerc($mem_free, $mem_all), fBytes($mem_free));
 	printf("%s\t%s Gap\n", fPerc($mem_gap_vm, $mem_all), fBytes($mem_gap_vm));
@@ -294,20 +284,20 @@ sub _system_memory {
 	printf("\tLogical Free:\t\t\t%s\t%s\n", fPerc($mem_avail, $mem_total), fBytes($mem_avail));
 	print "\n";
 
-	my $ktext = `/sbin/kldstat |/usr/bin/awk \'BEGIN {print "16i 0";} NR>1 {print toupper(\$4) "+"} END {print "p"}\' |/usr/bin/dc`;
-	my $kdata = `/usr/bin/vmstat -m |/usr/bin/sed -Ee '1s/.*/0/;s/.* ([0-9]+)K.*/\\1+/;\$s/\$/1024*p/' |/usr/bin/dc`;
-	my $kmem = ($ktext + $kdata);
-	my $kmem_map_size = $Kstat->{"vm.kmem_map_size"};
-	my $kmem_map_free = $Kstat->{"vm.kmem_map_free"};
-	my $kmem_map_total = ($kmem_map_size + $kmem_map_free);
+	#my $ktext = `/sbin/kldstat |/usr/bin/awk \'BEGIN {print "16i 0";} NR>1 {print toupper(\$4) "+"} END {print "p"}\' |/usr/bin/dc`;
+	#my $kdata = `/usr/bin/vmstat -m |/usr/bin/sed -Ee '1s/.*/0/;s/.* ([0-9]+)K.*/\\1+/;\$s/\$/1024*p/' |/usr/bin/dc`;
+	#my $kmem = ($ktext + $kdata);
+	#my $kmem_map_size = $Kstat->{"vm.kmem_map_size"};
+	#my $kmem_map_free = $Kstat->{"vm.kmem_map_free"};
+	#my $kmem_map_total = ($kmem_map_size + $kmem_map_free);
 
-	printf("Kernel Memory:\t\t\t\t\t%s\n", fBytes($kmem));
-	printf("\tData:\t\t\t\t%s\t%s\n", fPerc($kdata, $kmem), fBytes($kdata));
-	printf("\tText:\t\t\t\t%s\t%s\n\n", fPerc($ktext, $kmem), fBytes($ktext));
+	#printf("Kernel Memory:\t\t\t\t\t%s\n", fBytes($kmem));
+	#printf("\tData:\t\t\t\t%s\t%s\n", fPerc($kdata, $kmem), fBytes($kdata));
+	#printf("\tText:\t\t\t\t%s\t%s\n\n", fPerc($ktext, $kmem), fBytes($ktext));
 
-	printf("Kernel Memory Map:\t\t\t\t%s\n", fBytes($kmem_map_total));
-	printf("\tSize:\t\t\t\t%s\t%s\n", fPerc($kmem_map_size, $kmem_map_total), fBytes($kmem_map_size));
-	printf("\tFree:\t\t\t\t%s\t%s\n", fPerc($kmem_map_free, $kmem_map_total), fBytes($kmem_map_free));
+	#printf("Kernel Memory Map:\t\t\t\t%s\n", fBytes($kmem_map_total));
+	#printf("\tSize:\t\t\t\t%s\t%s\n", fPerc($kmem_map_size, $kmem_map_total), fBytes($kmem_map_size));
+	#printf("\tFree:\t\t\t\t%s\t%s\n", fPerc($kmem_map_free, $kmem_map_total), fBytes($kmem_map_free));
 }
 
 
@@ -633,7 +623,7 @@ sub _vdev_summary {
 	my $vdev_cache_hits = $Kstat->{"kstat.zfs.misc.vdev_cache_stats.hits"};
 	my $vdev_cache_total = ($vdev_cache_misses + $vdev_cache_hits + $vdev_cache_delegations);
 
-	if ($Kstat->{"vfs.zfs.vdev.cache.size"} == 0) {
+	if ( `cat /sys/module/zfs/parameters/zfs_vdev_cache_size` == 0) {
 		printf "VDEV cache is disabled\n";
 	} elsif ($vdev_cache_total > 0) {
 		printf("VDEV Cache Summary:\t\t\t\t%s\n", fHits($vdev_cache_total));
